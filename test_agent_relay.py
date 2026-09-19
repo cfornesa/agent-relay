@@ -160,3 +160,58 @@ def test_dashboard_is_asset_and_invalid_input_is_documented_error():
         missing_name = client.post("/api/v1/agents", json={})
         assert missing_name.status_code == 400
         assert missing_name.json()["error"]["code"] == "invalid_input"
+
+
+def test_acceptance_scenario_1_exchange_task_and_result():
+    """SPEC.md Scenario 1: Register two agents, exchange a task and its result."""
+    with TestClient(main.app) as client:
+        # 1. Register two agents
+        alice, alice_headers = register(client, "alice")
+        bob, bob_headers = register(client, "bob")
+
+        # 2. Sender (Alice) sends a task to recipient (Bob)
+        send_response = client.post(
+            "/api/v1/tasks",
+            headers=alice_headers,
+            json={"to": bob["agent_id"], "input": "review and uppercase me"},
+        )
+        assert send_response.status_code == 201
+        task_data = send_response.json()
+        task_id = task_data["task_id"]
+        assert task_data["status"] == "queued"
+
+        # 3. Recipient (Bob) claims the task
+        claim_response = client.post(
+            "/api/v1/tasks/claim",
+            headers=bob_headers,
+            json={"worker_id": "bob-worker-1", "wait_seconds": 0},
+        )
+        assert claim_response.status_code == 200
+        claim_data = claim_response.json()
+        assert claim_data["task_id"] == task_id
+        assert claim_data["from"] == alice["agent_id"]
+        assert claim_data["input"] == "review and uppercase me"
+        claim_token = claim_data["claim_token"]
+
+        # 4. Recipient (Bob) completes the task with its result
+        expected_output = "REVIEW AND UPPERCASE ME"
+        complete_response = client.post(
+            f"/api/v1/tasks/{task_id}/complete",
+            headers=bob_headers,
+            json={"claim_token": claim_token, "output": expected_output},
+        )
+        assert complete_response.status_code == 200
+        assert complete_response.json()["status"] == "completed"
+
+        # 5. Sender (Alice) reads the result
+        get_response = client.get(f"/api/v1/tasks/{task_id}", headers=alice_headers)
+        assert get_response.status_code == 200
+        result = get_response.json()
+        assert result["task_id"] == task_id
+        assert result["from"] == alice["agent_id"]
+        assert result["to"] == bob["agent_id"]
+        assert result["status"] == "completed"
+        assert result["output"] == expected_output
+        assert result["error"] is None
+        assert result["finished_at"] is not None
+
