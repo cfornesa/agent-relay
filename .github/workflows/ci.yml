@@ -84,9 +84,6 @@ jobs:
           if ! kind get clusters | grep -q "^agent-relay$"; then
             echo "Creating kind cluster agent-relay..."
             kind create cluster --name agent-relay
-            kubectl apply -f k8s/postgres.yaml
-            kubectl apply -f k8s/app.yaml
-            kubectl wait --for=condition=ready pod -l app=postgres --timeout=120s
           fi
 
       - name: Configure kubeconfig
@@ -114,6 +111,10 @@ jobs:
       - name: Deploy to kind cluster and wait for rollout
         run: |
           export PATH="$HOME/.local/bin:$PATH"
+          kubectl apply -f k8s/postgres.yaml
+          kubectl rollout status deployment/postgres --timeout=120s
+          kubectl apply -f k8s/app.yaml
           kubectl set image deployment/agent-relay agent-relay=agent-relay:${IMAGE_TAG}
           kubectl rollout status deployment/agent-relay --timeout=120s
+
 
