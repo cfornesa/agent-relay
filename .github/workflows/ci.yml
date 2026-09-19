@@ -60,13 +60,45 @@ jobs:
 
       - name: Install kubectl and kind
         run: |
+          mkdir -p "$HOME/.local/bin"
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+          export PATH="$HOME/.local/bin:$PATH"
+
           ARCH=$(uname -m)
           if [ "$ARCH" = "x86_64" ]; then K8S_ARCH="amd64"; elif [ "$ARCH" = "aarch64" ]; then K8S_ARCH="arm64"; else K8S_ARCH="$ARCH"; fi
-          curl -LO "https://dl.k8s.io/release/v1.31.0/bin/linux/${K8S_ARCH}/kubectl"
-          chmod +x kubectl
-          mv kubectl /usr/local/bin/
-          curl -Lo /usr/local/bin/kind "https://kind.sigs.k8s.io/dl/v0.33.0/kind-linux-${K8S_ARCH}"
-          chmod +x /usr/local/bin/kind
+
+          if ! command -v kubectl >/dev/null 2>&1; then
+            curl -LO "https://dl.k8s.io/release/v1.31.0/bin/linux/${K8S_ARCH}/kubectl"
+            chmod +x kubectl
+            mv kubectl "$HOME/.local/bin/"
+          fi
+
+          if ! command -v kind >/dev/null 2>&1; then
+            curl -Lo "$HOME/.local/bin/kind" "https://kind.sigs.k8s.io/dl/v0.33.0/kind-linux-${K8S_ARCH}"
+            chmod +x "$HOME/.local/bin/kind"
+          fi
+
+      - name: Ensure kind cluster is running
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          if ! kind get clusters | grep -q "^agent-relay$"; then
+            echo "Creating kind cluster agent-relay..."
+            kind create cluster --name agent-relay
+            kubectl apply -f k8s/postgres.yaml
+            kubectl apply -f k8s/app.yaml
+            kubectl wait --for=condition=ready pod -l app=postgres --timeout=120s
+          fi
+
+      - name: Configure kubeconfig
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          if kubectl get nodes >/dev/null 2>&1; then
+            echo "Default kubeconfig is working."
+          else
+            echo "Using internal kind kubeconfig for containerized environment..."
+            kind get kubeconfig --name agent-relay --internal > /tmp/kubeconfig
+            echo "KUBECONFIG=/tmp/kubeconfig" >> $GITHUB_ENV
+          fi
 
       - name: Build Docker image with unique tag
         run: |
@@ -76,11 +108,12 @@ jobs:
 
       - name: Load image into kind cluster
         run: |
+          export PATH="$HOME/.local/bin:$PATH"
           kind load docker-image agent-relay:${IMAGE_TAG} --name agent-relay
 
       - name: Deploy to kind cluster and wait for rollout
         run: |
-          kind get kubeconfig --name agent-relay --internal > /tmp/kubeconfig
-          export KUBECONFIG=/tmp/kubeconfig
+          export PATH="$HOME/.local/bin:$PATH"
           kubectl set image deployment/agent-relay agent-relay=agent-relay:${IMAGE_TAG}
-          kubectl rollout status deployment/agent-relay --timeout=60s
+          kubectl rollout status deployment/agent-relay --timeout=120s
+
